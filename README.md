@@ -19,6 +19,54 @@ Pair-wise GSB 标注任务仓库（第 4 批 / 37）。
 ./mvnw -q verify
 ```
 
+## 实现说明
+
+源码位于 `src/main/java/com/example/gsb/diff/`：
+
+| 类 | 职责 |
+|----|------|
+| `LineDiffer` | 行级差异，输出 `KEEP` / `INSERT` / `DELETE` 编辑序列 |
+| `WordDiffer` | 词级差异，对变化行做行内 token 级差异 |
+| `UnifiedDiffFormatter` | 生成 unified diff 文本（上下文行数可配，含 hunk 头） |
+| `Patcher` | 正向应用补丁 / 反向撤销，严格校验原文 |
+| `Merger` | 三方合并，冲突处输出 `<<<<<<<` / `=======` / `>>>>>>>` 标记 |
+| `Texts` | 文本与行列表互转（`splitLines`/`joinLines` 互为逆运算） |
+
+### 算法选择与复杂度
+
+**行级差异采用 Myers O(ND) 贪心算法**（Eugene Myers, *An O(ND) Difference
+Algorithm and Its Variations*, 1986），即 Git diff 的同款算法。前向扫描保存
+每一步的 V 数组快照，再回溯得到最小编辑脚本（SES）。
+
+- 时间复杂度：O((N+M)·D)，其中 N、M 为两侧行数，D 为最小编辑距离；
+- 空间复杂度：O((N+M)·D)（保存完整回溯轨迹，换取实现简单、结果精确）。
+
+相比朴素 LCS 动态规划（O(N·M) 时间与空间），Myers 在改动稀疏（D 小）的
+真实配置文件场景下快得多；差异越大代价越高，但能保证输出**最小**编辑脚本。
+
+**词级差异复用同一 Myers 引擎**：先把行切分为 token 序列（连续字母/数字/
+下划线为一个词、连续空白为一个 token、每个 CJK 表意文字/假名/谚文音节、
+每个增补平面码位（emoji 等）单独成 token、其余标点单独成 token），再对
+token 序列做行级差异。切分按 `codePoint` 处理，中文与 emoji 等多字节字符
+不会被 UTF-16 surrogate 拆碎。
+
+**三方合并**：分别对 base→ours、base→theirs 做行级差异，把编辑脚本压缩为
+「base 区间 → 替换行」的变更集，再按区间位置归并：不重叠的变更直接应用；
+重叠区域分别回放两侧变更，结果一致则合并为一份，不一致则输出冲突块。
+
+### 已知限制
+
+- 空间为 O((N+M)·D)：对几十万行且几乎全量不同的文件会占用较多内存
+  （可后续换线性空间的分治 Myers 变体优化）。
+- 补丁应用基于本库的编辑脚本（`List<Edit>`），暂不支持直接解析
+  unified diff 文本打补丁。
+- unified diff 输出不含 `\ No newline at end of file` 标记；行以 `\n`
+  切分，不保留原始换行符差异（`\r\n` 会被当作行内容的一部分）。
+- 词级 token 不识别 emoji 组合序列（ZWJ 序列、肤色修饰符会被拆成多个
+  token），但不影响 diff 正确性，只影响高亮粒度。
+- 三方合并按行对齐，不支持重命名/移动检测；冲突标记为固定文本
+  （`ours`/`theirs`），未做标签自定义。
+
 ## 任务提示词
 
 以下为本题完整的 User Prompt 原文，两次执行必须使用完全相同的文本。
